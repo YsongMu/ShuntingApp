@@ -5,26 +5,39 @@
     android:orientation="vertical"
     android:padding="5dp">
 
-    <!--<RelativeLayout
+    <RelativeLayout
         android:layout_width="match_parent"
-        android:layout_height="wrap_content">
+        android:layout_height="30dp"
+        android:layout_marginBottom="5dp">
 
-        <Button
+        <ImageView
+            android:id="@+id/logo"
+            android:layout_width="wrap_content"
+            android:layout_height="match_parent"
+            android:layout_alignParentStart="true"
+            android:layout_centerVertical="true"
+            android:scaleType="fitStart"
+            android:src="@drawable/logo" />
+
+        <ImageButton
             android:id="@+id/setBtn"
             android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="设置"
-            android:layout_alignParentTop="true"
-            android:layout_alignParentEnd="true" />
-    </RelativeLayout>-->
+            android:layout_height="match_parent"
+            android:layout_alignParentEnd="true"
+            android:layout_centerVertical="true"
+            android:layout_marginTop="2dp"
+            android:layout_marginEnd="10dp"
+            android:layout_marginBottom="2dp"
+            android:adjustViewBounds="true"
+            android:background="?android:attr/selectableItemBackground"
+            android:scaleType="fitEnd"
+            android:src="@drawable/settings_icon" />
+    </RelativeLayout>
 
     <TableLayout
         android:id="@+id/tableLayout"
         android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="3"
-        android:divider="@drawable/table_divider"
-        android:showDividers="middle|beginning|end">
+        android:layout_height="wrap_content">
 
         <!-- 标题行1 -->
         <TableRow>
@@ -182,23 +195,23 @@
             android:id="@+id/titleTV"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:background="#ADD8E6"
-            android:text="第 号  调 解体  次  编制\n计划起止：xx-xx  班\n调机： "
             android:layout_marginLeft="5dp"
             android:layout_marginRight="5dp"
+            android:background="#ADD8E6"
+            android:paddingLeft="3dp"
             android:paddingTop="3dp"
             android:paddingBottom="3dp"
-            android:paddingLeft="3dp"
+            android:text="第 号  调 解体  次  编制\n计划起止：xx-xx  班\n调机： "
             android:textAlignment="textStart" />
 
         <androidx.recyclerview.widget.RecyclerView
             android:id="@+id/recycleView"
             android:layout_width="match_parent"
             android:layout_height="0dp"
-            android:layout_weight="10"
             android:layout_marginLeft="5dp"
             android:layout_marginRight="5dp"
-            android:background="@drawable/border_top_bottom"/>
+            android:layout_weight="10"
+            android:background="@drawable/border_top_bottom" />
     </LinearLayout>
 
     <LinearLayout

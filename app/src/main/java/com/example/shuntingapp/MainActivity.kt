@@ -6,7 +6,6 @@ import android.content.Context
 import android.content.Intent
 import android.location.Location
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
 import android.speech.tts.TextToSpeech
@@ -16,7 +15,6 @@ import android.telephony.TelephonyManager
 import android.widget.EditText
 import android.widget.TextView
 import android.widget.Toast
-import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -33,8 +31,9 @@ import com.google.gson.Gson
 import com.permissionx.guolindev.PermissionX
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
-import okhttp3.RequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
 import retrofit2.Call
+import retrofit2.Callback
 import retrofit2.Response
 import java.io.IOException
 import java.time.LocalDateTime
@@ -52,6 +51,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var textToSpeech: TextToSpeech
     private var devID = 0 // 设备号
     private var locomNum = 0 // 调机号
+    private var lastWarningTime = System.currentTimeMillis()
 
     companion object {
         private const val REQUEST_CODE_IMAGE_PICK = 102
@@ -65,9 +65,13 @@ class MainActivity : AppCompatActivity() {
 
 
         //region 初始化数据
+        // 从SharedPreferences加载保存的值
+        val savedPrefs = getSharedPreferences("AppPrefs", MODE_PRIVATE)
+        devID = savedPrefs.getString("devID", getString(R.string.DevID))!!.toInt()  // 如果没有则返回默认值
+        locomNum =
+            savedPrefs.getString("locomNum", getString(R.string.LocomNum))!!.toInt()  // 如果没有则返回默认值
+
         // 初始化报文参数
-        devID = getString(R.string.DevID).toInt()
-        locomNum = getString(R.string.LocomNum).toInt()
         var currentCutNum = 0
         var planNo = 0
         var lat = 0.0
@@ -105,6 +109,7 @@ class MainActivity : AppCompatActivity() {
 
         // 对于Android 10及以下版本，使用旧的API
         val phoneStateListener = object : PhoneStateListener() {
+            @Deprecated("Deprecated in Java")
             override fun onSignalStrengthsChanged(signalStrength: SignalStrength) {
                 super.onSignalStrengthsChanged(signalStrength)
                 // 更新信号强度
@@ -156,28 +161,49 @@ class MainActivity : AppCompatActivity() {
         //endregion
 
 
+        //region 设备号与机车号
+        binding.setBtn.setOnClickListener {
+            val layout = layoutInflater.inflate(R.layout.activity_settings_dialog, null)
+            val devIdET = layout.findViewById<EditText>(R.id.devIdET)
+            val locomNumET = layout.findViewById<EditText>(R.id.locomNumET)
+
+            // 设置输入框文本为现有值
+            devIdET.setText(devID.toString())
+            locomNumET.setText(locomNum.toString())
+
+            AlertDialog.Builder(this)
+                .setTitle("设置")
+                .setView(layout)
+                .setPositiveButton("保存") { dialog, _ ->
+                    devID = devIdET.text.toString().toInt()
+                    locomNum = locomNumET.text.toString().toInt()
+
+                    // 更新SharedPreferences
+                    val prefs = getSharedPreferences("AppPrefs", MODE_PRIVATE)
+                    with(prefs.edit()) {
+                        putString("devID", devID.toString())
+                        putString("locomNum", locomNum.toString())
+                        apply()
+                    }
+                    dialog.dismiss()
+                }
+                .setNegativeButton("取消") { dialog, _ ->
+                    dialog.cancel()
+                }
+                .show()
+        }
+        //endregion
+
+
         //region 每隔0.3秒POST回执报文
         executor.scheduleAtFixedRate({
             val receiptData = ReceiptMsg(true, devID, locomNum, planNo, lat, lng)
-            RetrofitClient.apiService.postReceipt("receipt", receiptData)
-                .enqueue(object : retrofit2.Callback<ApiResponse> {
-                    override fun onResponse(
-                        call: Call<ApiResponse>,
-                        response: Response<ApiResponse>
-                    ) {
-                        if (response.isSuccessful) {
-                            // 处理成功的响应
-                            LogUtils.d("服务器已收到回执包")
-                        } else {
-                            // 服务器返回错误状态码
-                            LogUtils.d("服务器错误: HTTP ${response.code()} ${response.message()}")
-                        }
-                    }
-
-                    override fun onFailure(call: Call<ApiResponse>, t: Throwable) {
-                        // 处理错误情况
-                        LogUtils.d("POST回执包失败: ${t.message}")
-                    }
+            performRequest(RetrofitClient.apiService.postReceipt("receipt", receiptData),
+                onSuccess = {
+                    LogUtils.d("服务器已收到回执包")
+                },
+                onError = { errorMessage ->
+                    LogUtils.d("POST回执包: $errorMessage")
                 })
         }, 0, 300, TimeUnit.MILLISECONDS)
         //endregion
@@ -185,50 +211,37 @@ class MainActivity : AppCompatActivity() {
 
         //region 每隔1秒GET心跳报文
         executor.scheduleAtFixedRate({
-            RetrofitClient.apiService.getDynamicEndpoint("heart/${devID}")
-                .enqueue(object : retrofit2.Callback<ApiResponse> {
-                    @RequiresApi(Build.VERSION_CODES.S)
-                    override fun onResponse(
-                        call: Call<ApiResponse>,
-                        response: Response<ApiResponse>
-                    ) {
-                        if (response.isSuccessful) {
-                            // 处理成功的响应
-                            if (response.body()?.Message == "心跳包") {
-                                val dataJson = response.body()!!.Data
-                                // 通过指定类解析指定Json
-                                val data = Gson().fromJson(
-                                    dataJson,
-                                    ResponseMsg.HeartbeatMsg::class.java
-                                )
+            performRequest(RetrofitClient.apiService.getDynamicEndpoint("heart/${devID}"),
+                onSuccess = { responseData ->
+                    if (responseData.Message == "心跳包") {
+                        val dataJson = responseData.Data
+                        // 通过指定类解析指定Json
+                        val data = Gson().fromJson(
+                            dataJson,
+                            ResponseMsg.HeartbeatMsg::class.java
+                        )
 
-                                // 获取调号，用于回执
-                                planNo = data.PlanNo
+                        // 获取调号，用于回执
+                        planNo = data.PlanNo
 
-                                // 语音报警
-                                checkAndSpeak(data.IsNewWarning, data.LongWarning)
+                        // 语音报警
+                        checkAndSpeak(data.IsNewWarning, data.LongWarning)
 
-                                // 更新状态信息
-                                runOnUiThread {
-                                    binding.ServerStatus.text = "已连接"
-                                    binding.LocomNum.text = locomNum.toString()
-                                    binding.Speed.text = data.Speed.toString()
-                                    binding.Distance.text = data.TenFiveThreeCars
-                                    binding.Warning.text = data.ShortWarning
-                                }
-                            } else {
-                                LogUtils.d("收到非心跳包: ${response.body()?.Message}")
-                            }
-                        } else {
-                            LogUtils.d("网络请求失败: ${response.code()} ${response.message()}")
+                        // 更新状态信息
+                        runOnUiThread {
+                            binding.ServerStatus.text = "已连接"
+                            binding.LocomNum.text = locomNum.toString()
+                            binding.Speed.text = data.Speed.toString()
+                            binding.Distance.text = data.TenFiveThreeCars
+                            binding.Warning.text = data.ShortWarning
                         }
+                    } else {
+                        LogUtils.d("收到非心跳包: ${responseData.Message}")
                     }
-
-                    override fun onFailure(call: Call<ApiResponse>, t: Throwable) {
-                        // 处理错误情况
-                        LogUtils.d("GET心跳包失败")
-                        runOnUiThread { binding.ServerStatus.text = "未连接" }
-                    }
+                },
+                onError = { errorMessage ->
+                    LogUtils.d("GET心跳包: $errorMessage")
+                    runOnUiThread { binding.ServerStatus.text = "未连接" }
                 })
         }, 500, 1000, TimeUnit.MILLISECONDS)
         //endregion
@@ -243,64 +256,59 @@ class MainActivity : AppCompatActivity() {
 
         //region 每隔5秒GET调车单报文
         executor.scheduleAtFixedRate({
-            RetrofitClient.apiService.getDynamicEndpoint("plan/${devID}")
-                .enqueue(object : retrofit2.Callback<ApiResponse> {
-                    @RequiresApi(Build.VERSION_CODES.S)
-                    override fun onResponse(
-                        call: Call<ApiResponse>,
-                        response: Response<ApiResponse>
-                    ) {
-                        if (response.isSuccessful) {
-                            // 处理成功的响应
-                            if (response.body()?.Message == "作业计划包") {
-                                val dataJson = response.body()!!.Data
-                                // 通过指定类解析指定Json
-                                val data =
-                                    Gson().fromJson(dataJson, ResponseMsg.ShuntingMsg::class.java)
+            performRequest(RetrofitClient.apiService.getDynamicEndpoint("plan/${devID}"),
+                onSuccess = { responseData ->
+                    if (responseData.Message == "作业计划包") {
+                        val dataJson = responseData.Data
+                        // 通过指定类解析指定Json
+                        val data =
+                            Gson().fromJson(dataJson, ResponseMsg.ShuntingMsg::class.java)
 
-                                // 获取现在勾序，用于打点执行
-                                currentCutNum = data.CurrentCutNum
+                        // 获取现在勾序，用于打点执行
+                        currentCutNum = data.CurrentCutNum
 
-                                // 更改时间格式
-                                val localTime1 = LocalDateTime.parse(data.PlanStTime)
-                                val startTime =
-                                    localTime1.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
-                                val localTime2 = LocalDateTime.parse(data.PlanEndTime)
-                                val endTime =
-                                    localTime2.format(DateTimeFormatter.ofPattern("HH:mm:ss"))
+                        // 更改时间格式
+                        val localTime1 = LocalDateTime.parse(data.PlanStTime)
+                        val startTime =
+                            localTime1.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))
+                        val localTime2 = LocalDateTime.parse(data.PlanEndTime)
+                        val endTime =
+                            localTime2.format(DateTimeFormatter.ofPattern("HH:mm"))
 
-                                // 更新调车单标题
-                                runOnUiThread {
-                                    binding.titleTV.text =
-                                        "第${data.PlanNo}号 ${data.LocomNo}调  ${data.PlanType}${data.TrainNum}次  ${data.Maker}编制\n" +
-                                                "计划起止: ${startTime}至${endTime}  ${data.Order}班\n" +
-                                                "调机: ${data.LocomNum}"
-                                }
-
-                                // 更新调车单表格
-                                data.Cuts?.map { cut ->
-                                    ShuntingForm(
-                                        hook = cut.CutNum,
-                                        track = cut.LineName,
-                                        pn = cut.PlanType,
-                                        count = cut.CarsNum,
-                                        content = cut.NoteText
-                                    )
-                                }?.let { formData ->
-                                    runOnUiThread { shuntingFormAdapter.addData(formData) }
-                                }
-                            } else {
-                                LogUtils.d("收到非作业计划包: ${response.body()?.Message}")
-                            }
-                        } else {
-                            LogUtils.d("网络请求失败: ${response.code()} ${response.message()}")
+                        // 更新调车单标题
+                        runOnUiThread {
+                            binding.titleTV.text = getString(
+                                R.string.shunting_form_title,
+                                data.PlanNo,
+                                data.LocomNo,
+                                data.PlanType,
+                                data.TrainNum,
+                                data.Maker,
+                                startTime,
+                                endTime,
+                                data.Order,
+                                data.LocomNum
+                            )
                         }
-                    }
 
-                    override fun onFailure(call: Call<ApiResponse>, t: Throwable) {
-                        // 处理错误情况
-                        LogUtils.d("GET作业计划包失败")
+                        // 更新调车单表格
+                        data.Cuts?.map { cut ->
+                            ShuntingForm(
+                                hook = cut.CutNum,
+                                track = cut.LineName,
+                                pn = cut.PlanType,
+                                count = cut.CarsNum,
+                                content = cut.NoteText
+                            )
+                        }?.let { formData ->
+                            runOnUiThread { shuntingFormAdapter.addData(formData) }
+                        }
+                    } else {
+                        LogUtils.d("收到非作业计划包: ${responseData.Message}")
                     }
+                },
+                onError = { errorMessage ->
+                    LogUtils.d("GET作业计划包: $errorMessage")
                 })
         }, 1500, 5000, TimeUnit.MILLISECONDS)
         //endregion
@@ -312,7 +320,7 @@ class MainActivity : AppCompatActivity() {
             val dialogView = layoutInflater.inflate(R.layout.activity_input_dialog, null)
             val dialogTV = dialogView.findViewById<TextView>(R.id.cutTV)
             val dialogET = dialogView.findViewById<EditText>(R.id.cutET)
-            dialogTV.text = "纬度: ${lat}\n" + "经度: $lng"
+            dialogTV.text = getString(R.string.location_info, lat, lng)
 
             // 加载弹窗功能
             val dialog = AlertDialog.Builder(this)
@@ -321,34 +329,30 @@ class MainActivity : AppCompatActivity() {
                 .setPositiveButton("确定") { _, _ ->
                     // 检查输入是否为数字
                     if (dialogET.text.toString().matches("\\d+".toRegex())) {
-                        // 点击确定按钮后POST位置信息
                         val lineNo = dialogET.text.toString().toInt()
                         val executionData =
                             ExecutionMsg(true, devID, locomNum, lineNo, lat, lng, currentCutNum)
-                        RetrofitClient.apiService.postExecution("execute", executionData)
-                            .enqueue(object : retrofit2.Callback<ApiResponse> {
-                                override fun onResponse(
-                                    call: Call<ApiResponse>,
-                                    response: Response<ApiResponse>
-                                ) {
-                                    if (response.isSuccessful) {
-                                        // 处理成功的响应
-                                        Toast.makeText(
-                                            this@MainActivity,
-                                            "打点成功",
-                                            Toast.LENGTH_SHORT
-                                        ).show()
-                                        LogUtils.d("服务器已收到执行包")
-                                    } else {
-                                        // 服务器返回错误状态码
-                                        LogUtils.d("服务器错误: HTTP ${response.code()} ${response.message()}")
-                                    }
-                                }
 
-                                override fun onFailure(call: Call<ApiResponse>, t: Throwable) {
-                                    // 处理错误情况
-                                    LogUtils.d("POST执行报文失败: ${t.message}")
-                                }
+                        // 进行网络请求
+                        performRequest(RetrofitClient.apiService.postExecution(
+                            "execute",
+                            executionData
+                        ),
+                            onSuccess = {
+                                Toast.makeText(
+                                    this@MainActivity,
+                                    "打点成功",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                                LogUtils.d("服务器已收到执行包")
+                            },
+                            onError = { errorMessage ->
+                                Toast.makeText(
+                                    this@MainActivity,
+                                    "打点失败",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                                LogUtils.d("POST执行包: $errorMessage")
                             })
                     } else {
                         // 输入非数字提醒
@@ -388,8 +392,38 @@ class MainActivity : AppCompatActivity() {
     }
 
 
-    private fun checkAndSpeak(isNewWarning: Boolean, longWarning: String) {
-        if (isNewWarning) {
+    private fun <T> performRequest(
+        call: Call<T>,
+        onSuccess: (T) -> Unit,
+        onError: (String) -> Unit
+    ) {
+        call.enqueue(object : Callback<T> {
+            override fun onResponse(call: Call<T>, response: Response<T>) {
+                if (response.isSuccessful) {
+                    // 处理成功的响应
+                    response.body()?.let {
+                        onSuccess(it)
+                    }
+                } else {
+                    // 服务器响应错误
+                    onError("服务器响应错误 ${response.code()} ${response.message()}")
+                }
+            }
+
+            override fun onFailure(call: Call<T>, t: Throwable) {
+                // 处理失败的请求
+                onError("网络请求失败 ${t.message}")
+            }
+        })
+    }
+
+
+    private fun checkAndSpeak(isNewWarning: Boolean, longWarning: String?) {
+        val currentTime = System.currentTimeMillis()
+        // 检查是否已经过了至少五秒
+        if (isNewWarning && longWarning != null && (currentTime - lastWarningTime) >= 8000) {
+            lastWarningTime = currentTime  // 更新上次报警时间
+
             textToSpeech.speak(longWarning, TextToSpeech.QUEUE_FLUSH, null, null)
             val dialog = AlertDialog.Builder(this)
                 .setTitle("报警信息")
@@ -404,6 +438,7 @@ class MainActivity : AppCompatActivity() {
     }
 
 
+    @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == REQUEST_CODE_IMAGE_PICK) {
@@ -413,46 +448,34 @@ class MainActivity : AppCompatActivity() {
                     contentResolver.openInputStream(uri)?.use { inputStream ->
                         val bytes = inputStream.readBytes()
                         val imageBody =
-                            RequestBody.create("image/jpeg".toMediaTypeOrNull(), bytes)
+                            bytes.toRequestBody("image/jpeg".toMediaTypeOrNull(), 0, bytes.size)
                         val imagePart =
                             MultipartBody.Part.createFormData("image", "upload.jpg", imageBody)
 
                         // 进行网络请求
-                        RetrofitClient.apiService.postImage(
+                        performRequest(RetrofitClient.apiService.postImage(
                             "image",
                             true,
                             devID,
                             locomNum,
                             LocalDateTime.now().toString(),
                             imagePart
-                        )
-                            .enqueue(object : retrofit2.Callback<ApiResponse> {
-                                override fun onResponse(
-                                    call: Call<ApiResponse>,
-                                    response: Response<ApiResponse>
-                                ) {
-                                    if (response.isSuccessful) {
-                                        Toast.makeText(
-                                            this@MainActivity,
-                                            "上传成功",
-                                            Toast.LENGTH_SHORT
-                                        ).show()
-                                    } else {
-                                        Toast.makeText(
-                                            this@MainActivity,
-                                            "上传失败",
-                                            Toast.LENGTH_SHORT
-                                        ).show()
-                                    }
-                                }
-
-                                override fun onFailure(call: Call<ApiResponse>, t: Throwable) {
-                                    Toast.makeText(
-                                        this@MainActivity,
-                                        "上传错误: ${t.message}",
-                                        Toast.LENGTH_SHORT
-                                    ).show()
-                                }
+                        ),
+                            onSuccess = {
+                                Toast.makeText(
+                                    this@MainActivity,
+                                    "上传成功",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                                LogUtils.d("服务器已收到图片包")
+                            },
+                            onError = { errorMessage ->
+                                Toast.makeText(
+                                    this@MainActivity,
+                                    "上传失败",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                                LogUtils.d("POST图片包: $errorMessage")
                             })
                     }
                 } catch (e: IOException) {
@@ -466,16 +489,16 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        textToSpeech?.stop()
-        textToSpeech?.shutdown()
+        textToSpeech.stop()
+        textToSpeech.shutdown()
         GPSUtils.getInstance(this)!!.unregisterLocationUpdates()
-        executor?.shutdownNow()
+        executor.shutdownNow()
         try {
-            if (!executor?.awaitTermination(1, TimeUnit.SECONDS)!!) {
-                executor?.shutdownNow()
+            if (!executor.awaitTermination(1, TimeUnit.SECONDS)) {
+                executor.shutdownNow()
             }
         } catch (ie: InterruptedException) {
-            executor?.shutdownNow()
+            executor.shutdownNow()
             Thread.currentThread().interrupt()
         }
     }

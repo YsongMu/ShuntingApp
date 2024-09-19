@@ -2,4 +2,6 @@
     <string name="app_name">ShuntingApp</string>
     <string name="DevID">2</string>
     <string name="LocomNum">5019</string>
+    <string name="shunting_form_title">第%1$d号 %2$d调  %3$s%4$s次  %5$s编制\n计划起止: %6$s至%7$s  %8$s班\n调机: %9$d</string>
+    <string name="location_info">纬度: %1$f\n经度: %2$f</string>
 </resources>
