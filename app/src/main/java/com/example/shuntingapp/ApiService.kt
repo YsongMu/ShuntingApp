@@ -31,12 +31,6 @@ interface ApiService {
         @Body requestData: ExecutionMsg
     ): Call<ApiResponse>
 
-    @POST("{endpoint}")
-    fun postImageString(
-        @Path("endpoint") endpoint: String,
-        @Body requestData: String
-    ): Call<ApiResponse>
-
     @Multipart
     @POST("{endpoint}")
     fun postImage(

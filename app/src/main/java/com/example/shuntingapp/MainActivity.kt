@@ -1,6 +1,7 @@
 package com.example.shuntingapp
 
 import android.Manifest
+import android.app.Activity
 import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
@@ -15,6 +16,8 @@ import android.telephony.TelephonyManager
 import android.widget.EditText
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -49,13 +52,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var shuntingFormAdapter: ShuntingFormAdapter
     private lateinit var recyclerView: RecyclerView
     private lateinit var textToSpeech: TextToSpeech
+    private lateinit var imagePickerLauncher: ActivityResultLauncher<Intent>
     private var devID = 0 // 设备号
     private var locomNum = 0 // 调机号
     private var lastWarningTime = System.currentTimeMillis()
-
-    companion object {
-        private const val REQUEST_CODE_IMAGE_PICK = 102
-    }
 
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -155,7 +155,7 @@ class MainActivity : AppCompatActivity() {
                             }
                         })
                 } else {
-                    Toast.makeText(this, " You denied $deniedList", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, " 未授予权限: $deniedList", Toast.LENGTH_SHORT).show()
                 }
             }
         //endregion
@@ -371,6 +371,62 @@ class MainActivity : AppCompatActivity() {
 
 
         //region 拍照上传POST图片报文
+        // 注册ActivityResultLauncher
+        imagePickerLauncher =
+            registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+                if (result.resultCode == Activity.RESULT_OK) {
+                    val imageUri: Uri? = result.data?.data
+                    imageUri?.let { uri ->
+                        try {
+                            contentResolver.openInputStream(uri)?.use { inputStream ->
+                                val bytes = inputStream.readBytes()
+                                val imageBody =
+                                    bytes.toRequestBody(
+                                        "image/jpeg".toMediaTypeOrNull(),
+                                        0,
+                                        bytes.size
+                                    )
+                                val imagePart =
+                                    MultipartBody.Part.createFormData(
+                                        "image",
+                                        "upload.jpg",
+                                        imageBody
+                                    )
+
+                                // 进行网络请求
+                                performRequest(RetrofitClient.apiService.postImage(
+                                    "image",
+                                    true,
+                                    devID,
+                                    locomNum,
+                                    LocalDateTime.now().toString(),
+                                    imagePart
+                                ),
+                                    onSuccess = {
+                                        Toast.makeText(
+                                            this@MainActivity,
+                                            "上传成功",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                        LogUtils.d("服务器已收到图片包")
+                                    },
+                                    onError = { errorMessage ->
+                                        Toast.makeText(
+                                            this@MainActivity,
+                                            "上传失败",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                        LogUtils.d("POST图片包: $errorMessage")
+                                    })
+                            }
+                        } catch (e: IOException) {
+                            Toast.makeText(this, "文件读取失败: ${e.message}", Toast.LENGTH_SHORT)
+                                .show()
+                        }
+                    }
+                }
+            }
+
         binding.takePhotoBtn.setOnClickListener {
             // 检查权限，获取相册图片
             PermissionX.init(this).permissions(Manifest.permission.READ_EXTERNAL_STORAGE)
@@ -381,9 +437,9 @@ class MainActivity : AppCompatActivity() {
                                 Intent.ACTION_PICK,
                                 MediaStore.Images.Media.EXTERNAL_CONTENT_URI
                             )
-                        startActivityForResult(intent, REQUEST_CODE_IMAGE_PICK)
+                        imagePickerLauncher.launch(intent)
                     } else {
-                        Toast.makeText(this, " You denied $deniedList", Toast.LENGTH_SHORT)
+                        Toast.makeText(this, " 未授予权限: $deniedList", Toast.LENGTH_SHORT)
                             .show()
                     }
                 }
@@ -434,55 +490,6 @@ class MainActivity : AppCompatActivity() {
                 .create()
 
             dialog.show()
-        }
-    }
-
-
-    @Deprecated("Deprecated in Java")
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == REQUEST_CODE_IMAGE_PICK) {
-            val imageUri: Uri? = data?.data
-            imageUri?.let { uri ->
-                try {
-                    contentResolver.openInputStream(uri)?.use { inputStream ->
-                        val bytes = inputStream.readBytes()
-                        val imageBody =
-                            bytes.toRequestBody("image/jpeg".toMediaTypeOrNull(), 0, bytes.size)
-                        val imagePart =
-                            MultipartBody.Part.createFormData("image", "upload.jpg", imageBody)
-
-                        // 进行网络请求
-                        performRequest(RetrofitClient.apiService.postImage(
-                            "image",
-                            true,
-                            devID,
-                            locomNum,
-                            LocalDateTime.now().toString(),
-                            imagePart
-                        ),
-                            onSuccess = {
-                                Toast.makeText(
-                                    this@MainActivity,
-                                    "上传成功",
-                                    Toast.LENGTH_SHORT
-                                ).show()
-                                LogUtils.d("服务器已收到图片包")
-                            },
-                            onError = { errorMessage ->
-                                Toast.makeText(
-                                    this@MainActivity,
-                                    "上传失败",
-                                    Toast.LENGTH_SHORT
-                                ).show()
-                                LogUtils.d("POST图片包: $errorMessage")
-                            })
-                    }
-                } catch (e: IOException) {
-                    Toast.makeText(this, "文件读取失败: ${e.message}", Toast.LENGTH_SHORT)
-                        .show()
-                }
-            }
         }
     }
 
