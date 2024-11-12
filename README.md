@@ -1,1 +1,1 @@
-Android shunting client developed by kotlin
+Android shunting app developed by kotlin
